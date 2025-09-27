@@ -45,8 +45,8 @@ export class ClaudeProcessManager extends EventEmitter {
     super();
     this.historyReader = historyReader;
     this.statusTracker = statusTracker;
-    this.claudeExecutablePath = claudeExecutablePath || this.findClaudeExecutable();
     this.logger = createLogger('ClaudeProcessManager');
+    this.claudeExecutablePath = claudeExecutablePath || this.findClaudeExecutable();
     this.envOverrides = envOverrides || {};
     this.toolMetricsService = toolMetricsService;
     this.sessionInfoService = sessionInfoService;
@@ -62,40 +62,48 @@ export class ClaudeProcessManager extends EventEmitter {
    * Since @anthropic-ai/claude-code is a dependency, claude should be in node_modules/.bin
    */
   private findClaudeExecutable(): string {
-    // When running as an npm package, find claude relative to this module
-    // __dirname will be something like /path/to/node_modules/cui-server/dist/services
-    const packageRoot = path.resolve(__dirname, '..', '..');
-    const claudePath = path.join(packageRoot, 'node_modules', '.bin', 'claude');
-    
-    if (existsSync(claudePath)) {
-      return claudePath;
+    // Windows-specific: try multiple executable names
+    const windowsExecutables = process.platform === 'win32'
+      ? ['claude.cmd', 'claude.bat', 'claude.exe', 'claude.ps1']
+      : ['claude'];
+
+    // Try to find executable in multiple locations
+    const searchLocations = [
+      // When running as an npm package, find claude relative to this module
+      // __dirname will be something like /path/to/node_modules/cui-server/dist/services
+      path.resolve(__dirname, '..', '..', 'node_modules', '.bin'),
+      // Try from the parent node_modules (when cui-server is installed as a dependency)
+      // packageRoot -> /node_modules/cui-server, parent -> /node_modules, so /node_modules/.bin/claude
+      path.resolve(__dirname, '..', '..', '..', '.bin'),
+      // Fallback: try from current working directory (for local development)
+      path.join(process.cwd(), 'node_modules', '.bin')
+    ];
+
+    // Search for any valid executable
+    for (const location of searchLocations) {
+      for (const executable of windowsExecutables) {
+        const candidatePath = path.join(location, executable);
+        if (existsSync(candidatePath)) {
+          console.debug('Found Claude executable', { path: candidatePath, location, executable });
+          return candidatePath;
+        }
+      }
     }
-    
-    // Try from the parent node_modules (when cui-server is installed as a dependency)
-    // packageRoot -> /node_modules/cui-server
-    // parent -> /node_modules, so /node_modules/.bin/claude
-    const parentModulesPath = path.resolve(packageRoot, '..', '.bin', 'claude');
-    if (existsSync(parentModulesPath)) {
-      return parentModulesPath;
-    }
-    
-    // Fallback: try from current working directory (for local development)
-    const cwdPath = path.join(process.cwd(), 'node_modules', '.bin', 'claude');
-    if (existsSync(cwdPath)) {
-      return cwdPath;
-    }
-    
+
     // Final fallback: try to locate on PATH
     const pathEnv = process.env.PATH || '';
     const pathDirs = pathEnv.split(path.delimiter);
     for (const dir of pathDirs) {
-      const candidate = path.join(dir, 'claude');
-      if (existsSync(candidate)) {
-        return candidate;
+      for (const executable of windowsExecutables) {
+        const candidate = path.join(dir, executable);
+        if (existsSync(candidate)) {
+          console.debug('Found Claude executable on PATH', { path: candidate, dir, executable });
+          return candidate;
+        }
       }
     }
-    
-    throw new Error('Claude executable not found in node_modules. Ensure @anthropic-ai/claude-code is installed.');
+
+    throw new Error(`Claude executable not found. Ensure @anthropic-ai/claude-code is installed and claude is available on PATH. Searched for: ${windowsExecutables.join(', ')} in locations: ${searchLocations.map(loc => loc).join(', ')}`);
   }
 
   /**
@@ -513,9 +521,9 @@ export class ClaudeProcessManager extends EventEmitter {
         INIT_CWD: spawnConfig.cwd
       };
       
-      const process = this.spawnProcess(
-        { ...spawnConfig, env: envWithStreamingId }, 
-        args, 
+      const process = await this.spawnProcess(
+        { ...spawnConfig, env: envWithStreamingId },
+        args,
         streamingId
       );
       
@@ -712,18 +720,73 @@ export class ClaudeProcessManager extends EventEmitter {
   /**
    * Consolidated method to spawn Claude processes for both start and resume operations
    */
-  private spawnProcess(
+  private async spawnProcess(
     spawnConfig: { executablePath: string; cwd: string; env: NodeJS.ProcessEnv },
     args: string[],
     streamingId: string
-  ): ChildProcess {
+  ): Promise<ChildProcess> {
     const { executablePath, cwd } = spawnConfig;
     let { env } = spawnConfig;
 
+    // Windows-specific path normalization
+    const normalizeWindowsPath = (pathStr: string): string => {
+      if (process.platform !== 'win32') return pathStr;
+
+      // Normalize path separators to backslashes for Windows
+      return pathStr.replace(/\//g, '\\');
+    };
+
+    // Clean and validate executable path
+    const cleanedExecutablePath = executablePath.trim();
+    const normalizedExecutablePath = normalizeWindowsPath(cleanedExecutablePath);
+
+    // Clean and validate working directory
+    const cleanedCwd = cwd.trim();
+    const normalizedCwd = normalizeWindowsPath(cleanedCwd);
+
+    // Validate arguments - filter out null/undefined and empty strings
+    const cleanedArgs = args
+      .map(arg => arg?.trim())
+      .filter(arg => arg && arg.length > 0);
+
+    // Clean environment variables
+    let cleanedEnv: NodeJS.ProcessEnv = {};
+    for (const [key, value] of Object.entries(env)) {
+      if (value !== undefined && value !== null) {
+        cleanedEnv[key] = String(value);
+      }
+    }
+
+    // Windows-specific PATH handling
+    if (process.platform === 'win32') {
+      // Ensure PATH exists and is properly formatted
+      if (!cleanedEnv.PATH) {
+        cleanedEnv.PATH = process.env.PATH || '';
+      }
+
+      // Add common Windows paths to PATH if not present
+      const commonPaths = [
+        'C:\\Program Files\\nodejs',
+        'C:\\Program Files (x86)\\nodejs',
+        'C:\\Windows\\System32',
+        'C:\\Windows',
+        'C:\\Windows\\System32\\WindowsPowerShell\\v1.0'
+      ];
+
+      const currentPath = cleanedEnv.PATH || '';
+      const existingPaths = currentPath.split(';').map(p => p.trim());
+
+      for (const commonPath of commonPaths) {
+        if (!existingPaths.some(existing => existing.toLowerCase() === commonPath.toLowerCase())) {
+          cleanedEnv.PATH = `${cleanedEnv.PATH};${commonPath}`;
+        }
+      }
+    }
+
     // Inject router proxy if enabled
     if (this.routerService?.isEnabled()) {
-      env = {
-        ...env,
+      cleanedEnv = {
+        ...cleanedEnv,
         ANTHROPIC_BASE_URL: this.routerService.getProxyUrl(),
         ANTHROPIC_API_KEY: 'router-managed'
       };
@@ -735,9 +798,9 @@ export class ClaudeProcessManager extends EventEmitter {
     }
     
     // Check if MCP config is in args and validate it
-    const mcpConfigIndex = args.indexOf('--mcp-config');
-    if (mcpConfigIndex !== -1 && mcpConfigIndex + 1 < args.length) {
-      const mcpConfigPath = args[mcpConfigIndex + 1];
+    const mcpConfigIndex = cleanedArgs.indexOf('--mcp-config');
+    if (mcpConfigIndex !== -1 && mcpConfigIndex + 1 < cleanedArgs.length) {
+      const mcpConfigPath = cleanedArgs[mcpConfigIndex + 1];
       this.logger.debug('MCP config specified', { 
         streamingId,
         mcpConfigPath,
@@ -756,12 +819,12 @@ export class ClaudeProcessManager extends EventEmitter {
       }
     }
     
-    this.logger.debug('Spawning Claude process', { 
+    this.logger.debug('Spawning Claude process', {
       streamingId,
-      executablePath, 
-      args, 
-      cwd,
-      PATH: env.PATH,
+      executablePath: normalizedExecutablePath,
+      args: cleanedArgs,
+      cwd: normalizedCwd,
+      PATH: cleanedEnv.PATH,
       nodeVersion: process.version,
       platform: process.platform
     });
@@ -775,24 +838,34 @@ export class ClaudeProcessManager extends EventEmitter {
       });
       
       // Log the exact command for debugging
-      const fullCommand = `${executablePath} ${args.join(' ')}`;
-      this.logger.debug('SPAWNING CLAUDE COMMAND: ' + fullCommand, { 
+      const fullCommand = `${normalizedExecutablePath} ${cleanedArgs.join(' ')}`;
+      this.logger.debug('SPAWNING CLAUDE COMMAND: ' + fullCommand, {
         streamingId,
         fullCommand,
-        executablePath,
-        args,
-        cwd,
-        env: Object.entries(env).reduce((acc, [key, value]) => {
-          acc[key] = value;
-          return acc;
-        }, {} as Record<string, string | undefined>)
+        executablePath: normalizedExecutablePath,
+        args: cleanedArgs,
+        cwd: normalizedCwd,
+        env: cleanedEnv
       });
-      
-      const claudeProcess = spawn(executablePath, args, {
-        cwd,
-        env,
-        stdio: ['inherit', 'pipe', 'pipe'] // stdin inherited, stdout/stderr piped for capture
+
+      // Windows-specific spawn options
+      const spawnOptions: import('child_process').SpawnOptions = {
+        cwd: normalizedCwd,
+        env: cleanedEnv,
+        stdio: ['inherit', 'pipe', 'pipe'],
+        // Windows-specific options
+        shell: process.platform === 'win32',
+        windowsHide: process.platform === 'win32',
+        windowsVerbatimArguments: process.platform === 'win32'
+      };
+
+      this.logger.debug('Spawn options', {
+        streamingId,
+        ...spawnOptions,
+        envKeys: Object.keys(cleanedEnv)
       });
+
+      const claudeProcess = spawn(normalizedExecutablePath, cleanedArgs, spawnOptions) as any;
       
       // Handle spawn errors (like ENOENT when claude is not found)
       claudeProcess.on('error', (error: Error & NodeJS.ErrnoException) => {
@@ -808,11 +881,33 @@ export class ClaudeProcessManager extends EventEmitter {
         if (error.code === 'ENOENT') {
           this.logger.error('Claude executable not found', {
             streamingId,
-            attemptedPath: executablePath,
-            PATH: env.PATH
+            attemptedPath: normalizedExecutablePath,
+            PATH: cleanedEnv.PATH
           });
           this.emit('spawn-error', new CUIError('CLAUDE_NOT_FOUND', 'Claude CLI not found. Please ensure Claude is installed and in PATH.', 500));
+        } else if (error.code === 'EINVAL') {
+          this.logger.error('Invalid spawn arguments detected', {
+            streamingId,
+            executablePath: normalizedExecutablePath,
+            args: cleanedArgs,
+            cwd: normalizedCwd,
+            errorDetails: {
+              message: error.message,
+              errno: error.errno,
+              syscall: error.syscall
+            }
+          });
+          this.emit('spawn-error', new CUIError('INVALID_SPAWN_ARGUMENTS', `Invalid spawn arguments. Please check the executable path and arguments. Details: ${error.message}`, 500));
         } else {
+          this.logger.error('General spawn error', {
+            streamingId,
+            errorDetails: {
+              message: error.message,
+              code: error.code,
+              errno: error.errno,
+              syscall: error.syscall
+            }
+          });
           this.emit('spawn-error', new CUIError('PROCESS_SPAWN_FAILED', `Failed to spawn Claude process: ${error.message}`, 500));
         }
       });
@@ -822,9 +917,42 @@ export class ClaudeProcessManager extends EventEmitter {
           streamingId,
           killed: claudeProcess.killed,
           exitCode: claudeProcess.exitCode,
-          signalCode: claudeProcess.signalCode
+          signalCode: claudeProcess.signalCode,
+          spawnfile: claudeProcess.spawnfile,
+          spawnargs: claudeProcess.spawnargs
         });
-        throw new Error('Failed to spawn Claude process - no PID assigned');
+
+        // Windows-specific: process might be starting but PID not yet assigned
+        if (process.platform === 'win32') {
+          this.logger.warn('Windows process might still be starting, giving it time...', { streamingId });
+
+          // Wait a bit for Windows process to stabilize
+          return new Promise<ChildProcess>((resolve, reject) => {
+            const checkInterval = setInterval(() => {
+              if (claudeProcess.pid) {
+                clearInterval(checkInterval);
+                this.logger.info('Windows process PID assigned after delay', { streamingId, pid: claudeProcess.pid });
+                resolve(claudeProcess);
+              } else if (claudeProcess.killed) {
+                clearInterval(checkInterval);
+                this.emit('spawn-error', new CUIError('PROCESS_KILLED', 'Claude process was killed before PID assignment', 500));
+                reject(new Error('Claude process was killed before PID assignment'));
+              }
+            }, 100);
+
+            // Timeout after 5 seconds
+            setTimeout(() => {
+              clearInterval(checkInterval);
+              if (!claudeProcess.pid) {
+                this.emit('spawn-error', new CUIError('PID_ASSIGNMENT_TIMEOUT', 'Timeout waiting for process PID assignment', 500));
+                reject(new Error('Timeout waiting for process PID assignment'));
+              }
+            }, 5000);
+          });
+        } else {
+          this.emit('spawn-error', new CUIError('PID_ASSIGNMENT_FAILED', 'Failed to spawn Claude process - no PID assigned', 500));
+          throw new Error('Failed to spawn Claude process - no PID assigned');
+        }
       }
       
       this.logger.info('Claude process spawned successfully', { 

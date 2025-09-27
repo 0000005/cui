@@ -34,20 +34,20 @@
     "node": ">=20.19.0"
   },
   "scripts": {
-    "dev": "NODE_ENV=development tsx watch src/server.ts",
-    "dev:web": "NODE_ENV=development npx vite",
+    "dev": "cross-env NODE_ENV=development tsx watch src/server.ts",
+    "dev:web": "cross-env NODE_ENV=development npx vite",
     "clean": "rm -rf dist",
-    "build": "npm run clean && NODE_ENV=production npm run build:web && tsc && tsc-alias && npm run build:mcp",
-    "build:web": "NODE_ENV=production vite build",
+    "build": "npm run clean && cross-env NODE_ENV=production npm run build:web && tsc && tsc-alias && npm run build:mcp",
+    "build:web": "cross-env NODE_ENV=production vite build",
     "build:mcp": "chmod +x dist/mcp-server/index.js",
-    "start": "NODE_ENV=production node dist/server.js",
-    "test": "NODE_ENV=test vitest run",
-    "test:debug": "NODE_ENV=test LOG_LEVEL=debug vitest run",
-    "unit-tests": "NODE_ENV=test vitest run tests/unit",
-    "integration-tests": "NODE_ENV=test vitest run tests/integration",
-    "test:watch": "NODE_ENV=test vitest",
-    "test:coverage": "NODE_ENV=test vitest run --coverage",
-    "test:ui": "NODE_ENV=test vitest --ui",
+    "start": "cross-env NODE_ENV=production node dist/server.js",
+    "test": "cross-env NODE_ENV=test vitest run",
+    "test:debug": "cross-env NODE_ENV=test LOG_LEVEL=debug vitest run",
+    "unit-tests": "cross-env NODE_ENV=test vitest run tests/unit",
+    "integration-tests": "cross-env NODE_ENV=test vitest run tests/integration",
+    "test:watch": "cross-env NODE_ENV=test vitest",
+    "test:coverage": "cross-env NODE_ENV=test vitest run --coverage",
+    "test:ui": "cross-env NODE_ENV=test vitest --ui",
     "lint": "eslint src/**/*.ts",
     "typecheck": "tsc --noEmit",
     "prepare": "husky",
@@ -117,6 +117,7 @@
     "@vitest/coverage-v8": "^3.2.4",
     "@vitest/ui": "^3.2.4",
     "autoprefixer": "^10.4.21",
+    "cross-env": "^10.0.0",
     "eslint": "^9.32.0",
     "happy-dom": "^18.0.1",
     "husky": "^9.1.7",
@@ -134,6 +135,8 @@
   },
   "optionalDependencies": {
     "@tailwindcss/oxide-linux-x64-gnu": "^4.1.11",
-    "lightningcss-linux-x64-gnu": "^1.30.1"
+    "@tailwindcss/oxide-win32-x64-msvc": "^4.1.13",
+    "lightningcss-linux-x64-gnu": "^1.30.1",
+    "lightningcss-win32-x64-msvc": "^1.30.1"
   }
 }
