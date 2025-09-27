@@ -49,6 +49,21 @@ describe('FileSystemService', () => {
         new CUIError('PATH_NOT_FOUND', 'Path not found: /this/path/does/not/exist', 404)
       );
     });
+
+    it('should accept Windows drive letters with colon', async () => {
+      if (process.platform === 'win32') {
+        // On Windows, test with actual drive letter
+        const currentDrive = process.cwd().split(path.sep)[0]; // e.g., "C:"
+        await expect(service.listDirectory(`${currentDrive}\\this\\path\\does\\not\\exist`)).rejects.toThrow(
+          new CUIError('PATH_NOT_FOUND', `Path not found: ${currentDrive}\\this\\path\\does\\not\\exist`, 404)
+        );
+      } else {
+        // On non-Windows, drive letters should still be rejected
+        await expect(service.listDirectory('C:\\Windows')).rejects.toThrow(
+          new CUIError('INVALID_PATH', 'Path contains invalid characters', 400)
+        );
+      }
+    });
   });
 
   describe('File size validation', () => {

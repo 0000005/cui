@@ -218,11 +218,12 @@ export class FileSystemService {
         throw new CUIError('INVALID_PATH', 'Path contains null bytes', 400);
       }
       
-      // Check for invalid characters
-      if (/[<>:|?*]/.test(segment)) {
-        this.logger.warn('Invalid characters detected in path', { 
-          requestedPath, 
-          segment 
+      // Check for invalid characters - allow Windows drive letters
+      if (/[<>|?*]/.test(segment) ||
+          (process.platform === 'win32' ? /:/.test(segment.replace(/^[A-Za-z]:$/, '')) : /:/.test(segment))) {
+        this.logger.warn('Invalid characters detected in path', {
+          requestedPath,
+          segment
         });
         throw new CUIError('INVALID_PATH', 'Path contains invalid characters', 400);
       }
